@@ -1,0 +1,56 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: dotnet-build
+  name: push-dotnet-to-registry
+spec:
+  description: Push .NET artifacts to image registry.
+  params:
+    - name: output-image
+      description: Fully Qualified Output Image
+      type: string
+  results:
+    - name: IMAGE_URL
+      description: Location of build artifact
+    - name: IMAGE_DIGEST
+      description: Build artifact digest
+  steps:
+    - name: create-push-list
+      image: registry.access.redhat.com/ubi9
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        cd "$(workspaces.artifacts.path)"
+        for file in *.nupkg; do
+            echo "Including '$file'"
+            echo "$file:application/x-nupkg" >> oras-push-list.txt
+        done
+
+    - name: push-to-registry
+      image: quay.io/konflux-ci/oras:latest@sha256:0fdcb8ad0528042006457e57281532409a4d6e891f61208f96ab2b7b7b1746b6
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        IMAGE_URL="$(params.output-image)"
+
+        echo "Selecting auth"
+        select-oci-auth $IMAGE_URL > $HOME/auth.json
+
+        echo "Pushing to: $IMAGE_URL"
+        cd "$(workspaces.artifacts.path)"
+        oras push \
+             --registry-config "$HOME/auth.json" \
+             --artifact-type application/vnd.dotnet.build.v0 \
+             --annotation quay.expires-after=14d \
+             $IMAGE_URL \
+             `cat oras-push-list.txt` | tee oras.log
+
+        grep "Digest:" oras.log | awk '{print $2}' | tr -d '\n' > $(results.IMAGE_DIGEST.path)
+        echo -n $IMAGE_URL > $(results.IMAGE_URL.path)
+  workspaces:
+    - name: artifacts

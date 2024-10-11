@@ -1,0 +1,27 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: dotnet-build
+  name: dotnet-build-packages
+spec:
+  description: |-
+    Build .NET packages.
+  params:
+    - description: The .NET SDK image to use for the build
+      name: dotnet-sdk-image
+      type: string
+  steps:
+    - name: build
+      image: "$(params.dotnet-sdk-image)"
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        cd "$(workspaces.sources.path)/source"
+        ./build-packages.sh "$(workspaces.artifacts.path)"
+
+  workspaces:
+    - name: sources
+    - name: artifacts

@@ -1,0 +1,63 @@
+---
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  annotations:
+    build.appstudio.openshift.io/repo: https://github.com/tmds/try-konflux?rev={{revision}}
+    build.appstudio.redhat.com/commit_sha: '{{revision}}'
+    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
+    build.appstudio.redhat.com/target_branch: '{{target_branch}}'
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch == "main"
+  creationTimestamp: null
+  labels:
+    appstudio.openshift.io/application: try-konflux
+    appstudio.openshift.io/component: try-konflux-component
+    pipelines.appstudio.openshift.io/type: build
+  name: try-konflux-component-on-pull-request
+  namespace: tdeseyn-tenant
+spec:
+  params:
+    - name: dotnet-sdk-image
+      value: "registry.access.redhat.com/ubi8/dotnet-80:latest"
+    - name: output-image
+      value: "quay.io/redhat-user-workloads/tdeseyn-tenant/try-konflux-component:on-pr-{{revision}}"
+    - name: git-url
+      value: "{{ source_url }}"
+    - name: revision
+      value: "{{ revision }}"
+  pipelineRef:
+    resolver: git
+    params:
+      - name: url
+        value: "{{ source_url }}"
+      - name: revision
+        value: "{{ revision }}"
+      - name: pathInRepo
+        value: pipeline/build-dotnet-packages.yaml
+  workspaces:
+    - name: sources
+      volumeClaimTemplate:
+        metadata:
+          creationTimestamp: null
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+        status: {}
+    - name: artifacts
+      volumeClaimTemplate:
+        metadata:
+          creationTimestamp: null
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+        status: {}
+    - name: git-auth
+      secret:
+        secretName: '{{ git_auth_secret }}'

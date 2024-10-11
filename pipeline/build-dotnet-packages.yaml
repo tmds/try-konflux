@@ -1,0 +1,139 @@
+---
+# yamllint disable rule:line-length
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-dotnet-packages
+  labels:
+    build.appstudio.redhat.com/pipeline: "build-dotnet-packages"
+    pipelines.appstudio.openshift.io/type: build
+    appstudio.openshift.io/application: dotnet
+spec:
+  params:
+    - description: .NET SDK image to use for the build
+      name: dotnet-sdk-image
+      type: string
+    - description: Fully Qualified Output Image
+      name: output-image
+      type: string
+    - description: Source Repository URL
+      name: git-url
+      type: string
+    - description: Revision of the Source Repository
+      name: revision
+      type: string
+    - default: "false"
+      description: Force rebuild image
+      name: rebuild
+      type: string
+    - default: "false"
+      description: Skip checks against built image
+      name: skip-checks
+      type: string
+    - default: "false"
+      description: Execute the build with network isolation
+      name: hermetic
+      type: string
+  results:
+    - description: ""
+      name: CHAINS-GIT_URL
+      value: $(tasks.clone-repository.results.url)
+    - description: ""
+      name: CHAINS-GIT_COMMIT
+      value: $(tasks.clone-repository.results.commit)
+    - description: ""
+      name: IMAGE_URL
+      value: $(tasks.push-to-registry.results.IMAGE_URL)
+    - description: ""
+      name: IMAGE_DIGEST
+      value: $(tasks.push-to-registry.results.IMAGE_DIGEST)
+  tasks:
+    - name: init
+      params:
+        - name: rebuild
+          value: $(params.rebuild)
+        - name: skip-checks
+          value: $(params.skip-checks)
+        - name: image-url
+          value: todo - drop
+      taskRef:
+        params:
+          - name: name
+            value: init
+          - name: bundle
+            value: quay.io/redhat-appstudio-tekton-catalog/task-init:0.2@sha256:596b7c11572bb94eb67d9ffb4375068426e2a8249ff2792ce04ad2a4bc593a63
+          - name: kind
+            value: task
+        resolver: bundles
+    - name: clone-repository
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.revision)
+        - name: depth
+          value: 0
+      runAfter:
+        - init
+      taskRef:
+        params:
+          - name: name
+            value: git-clone
+          - name: bundle
+            value: quay.io/redhat-appstudio-tekton-catalog/task-git-clone:0.1@sha256:68a87cafeb43367160497d91a1a66bceef7acc179e809e8eb3996c1deb096042
+          - name: kind
+            value: task
+        resolver: bundles
+      when:
+        - input: $(tasks.init.results.build)
+          operator: in
+          values:
+            - "true"
+      workspaces:
+        - name: output
+          workspace: sources
+        - name: basic-auth
+          workspace: git-auth
+    - name: build-packages
+      runAfter:
+        - clone-repository
+      params:
+        - name: dotnet-sdk-image
+          value: $(params.dotnet-sdk-image)
+      workspaces:
+        - name: sources
+          workspace: sources
+        - name: artifacts
+          workspace: artifacts
+      taskRef:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.git-url)
+          - name: revision
+            value: $(params.revision)
+          - name: pathInRepo
+            value: task/build-dotnet-packages.yaml
+    - name: push-to-registry
+      params:
+        - name: output-image
+          value: $(params.output-image)
+      workspaces:
+        - name: artifacts
+          workspace: artifacts
+      runAfter:
+        - build-packages
+      taskRef:
+        resolver: git
+        params:
+          - name: url
+            value: $(params.git-url)
+          - name: revision
+            value: $(params.revision)
+          - name: pathInRepo
+            value: task/push-dotnet-to-registry.yaml
+  workspaces:
+    - name: sources
+    - name: artifacts
+    - name: git-auth
+      optional: true
