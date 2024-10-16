@@ -1,0 +1,104 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: dotnet
+  name: dotnet-build-packages
+spec:
+  description: |-
+    Build .NET packages.
+  params:
+    - description: The .NET SDK image to use for the build
+      name: dotnet-sdk-image
+      type: string
+    - description: The Trusted Artifact URI pointing to the artifact with the application source code.
+      name: SOURCE_ARTIFACT
+      type: string
+    - description: Fully Qualified Output Image
+      name: output-image
+      type: string
+  results:
+    - name: IMAGE_URL
+      description: Location of build artifact
+    - name: IMAGE_DIGEST
+      description: Build artifact digest
+  volumes:
+    - name: sources
+      emptyDir: {}
+    - name: artifacts
+      emptyDir: {}
+  steps:
+    - name: pull-sources-from-registry
+      image: quay.io/konflux-ci/oras:latest@sha256:0fdcb8ad0528042006457e57281532409a4d6e891f61208f96ab2b7b7b1746b6
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        SOURCE_ARTIFACT="$(params.SOURCE_ARTIFACT)"
+        SOURCE_ARTIFACT="${SOURCE_ARTIFACT:4}" # strip 'oci:' prefix.
+
+        echo "Pull sources from: $SOURCE_ARTIFACT"
+        cd /sources
+        mkdir source
+        cd source
+        oras blob fetch --output sources.tar.gz "$SOURCE_ARTIFACT"
+        tar xvf sources.tar.gz
+      volumeMounts:
+        - mountPath: /sources
+          name: sources
+    - name: build
+      image: "$(params.dotnet-sdk-image)"
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        cd /sources/source
+        ./build-packages.sh /artifacts
+      volumeMounts:
+        - mountPath: /sources
+          name: sources
+        - mountPath: /artifacts
+          name: artifacts
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+    - name: create-push-list
+      image: registry.access.redhat.com/ubi9
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        cd /artifacts
+        for file in *.nupkg; do
+            echo "Including '$file'"
+            echo "$file:application/x-nupkg" >> oras-push-list.txt
+        done
+      volumeMounts:
+        - mountPath: /artifacts
+          name: artifacts
+    - name: push-packages-to-registry
+      image: quay.io/konflux-ci/oras:latest@sha256:0fdcb8ad0528042006457e57281532409a4d6e891f61208f96ab2b7b7b1746b6
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        IMAGE_URL="$(params.output-image)"
+
+        echo "Selecting auth"
+        select-oci-auth $IMAGE_URL > $HOME/auth.json
+
+        echo "Pushing to: $IMAGE_URL"
+        cd /artifacts
+        oras push \
+             --registry-config "$HOME/auth.json" \
+             --artifact-type application/vnd.dotnet.build.v0 \
+             --annotation quay.expires-after=14d \
+             $IMAGE_URL \
+             `cat oras-push-list.txt` | tee oras.log
+
+        grep "Digest:" oras.log | awk '{print $2}' | tr -d '\n' > $(results.IMAGE_DIGEST.path)
+        echo -n $IMAGE_URL > $(results.IMAGE_URL.path)
+      volumeMounts:
+        - mountPath: /artifacts
+          name: artifacts
